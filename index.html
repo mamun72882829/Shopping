@@ -26,6 +26,18 @@
         
         @keyframes scrollNotice { from { transform: translateX(100%); } to { transform: translateX(-100%); } }
         .animate-notice { display: inline-block; animation: scrollNotice 18s linear infinite; }
+
+        /* Smooth Transition for Touch Zoom Container */
+        .zoom-container {
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .zoom-img { 
+            transition: transform 0.1s ease-out;
+            transform-origin: center center;
+            will-change: transform;
+        }
     </style>
 </head>
 <body class="bg-black pb-16 font-sans text-gray-200 min-h-screen selection:bg-blue-600 selection:text-white">
@@ -238,7 +250,7 @@
         </div>
     </div>
 
-    <!-- Product Details Modal (Multi-Image Gallery Supported) -->
+    <!-- Product Details Modal -->
     <div id="productModal" class="fixed inset-0 bg-black/80 z-[100] hidden items-end justify-center">
         <div class="bg-neutral-900 w-full max-w-md rounded-t-3xl p-6 animate-slide-up border-t border-neutral-800 max-h-[90vh] overflow-y-auto">
             <div class="flex justify-between items-center mb-4">
@@ -246,11 +258,13 @@
                 <button onclick="closeProduct()" class="text-gray-400 text-3xl">&times;</button>
             </div>
             
-            <!-- Main Display Image -->
-            <div id="modalImageContainer" class="h-64 bg-neutral-800 rounded-2xl mb-2 overflow-hidden flex items-center justify-center"></div>
+            <!-- Main Display Image (Click to Zoom Lightbox) -->
+            <div id="modalImageContainer" onclick="triggerZoomFromModal()" class="h-64 bg-neutral-800 rounded-2xl mb-3 overflow-hidden flex items-center justify-center p-2 border border-neutral-700/50 relative cursor-pointer group">
+                <!-- Image injected via JS -->
+            </div>
             
             <!-- Gallery Thumbnails -->
-            <div id="modalThumbnailContainer" class="flex gap-2 overflow-x-auto no-scrollbar mb-4"></div>
+            <div id="modalThumbnailContainer" class="flex gap-2 overflow-x-auto no-scrollbar mb-4 py-1"></div>
 
             <div class="mb-4">
                 <span id="modalPrice" class="text-2xl font-bold text-blue-400"></span>
@@ -265,6 +279,30 @@
                     <i class="fa fa-shopping-bag"></i> Order Now
                 </button>
             </div>
+        </div>
+    </div>
+
+    <!-- Image Zoom / Lightbox Modal (Gesture & Touch Zooming) -->
+    <div id="zoomModal" class="fixed inset-0 bg-black/95 z-[250] hidden flex-col justify-between p-4 transition-all duration-300">
+        <!-- Top Bar -->
+        <div class="flex justify-between items-center text-white z-10 pt-2">
+            <span id="zoomImageCounter" class="text-xs font-bold bg-neutral-800 px-3 py-1 rounded-full border border-neutral-700/80">1 / 1</span>
+            <button onclick="closeZoomModal()" class="bg-neutral-800/80 hover:bg-neutral-700 text-white w-9 h-9 rounded-full flex items-center justify-center border border-neutral-700 text-base active:scale-90 transition">
+                <i class="fa fa-times"></i>
+            </button>
+        </div>
+
+        <!-- Touch Zoom Image View Container -->
+        <div id="zoomTouchArea" class="relative flex-1 flex items-center justify-center overflow-hidden my-auto py-2 zoom-container">
+            <img id="modalZoomImg" src="" class="max-h-[80vh] max-w-full object-contain zoom-img select-none" alt="Zoomed View">
+            
+            <!-- Navigation Buttons -->
+            <button id="prevImgBtn" onclick="changeZoomImg(-1)" class="absolute left-2 bg-neutral-900/80 hover:bg-blue-600 text-white w-9 h-9 rounded-full border border-neutral-700 flex items-center justify-center text-xs active:scale-90 transition shadow-lg z-20">
+                <i class="fa fa-chevron-left"></i>
+            </button>
+            <button id="nextImgBtn" onclick="changeZoomImg(1)" class="absolute right-2 bg-neutral-900/80 hover:bg-blue-600 text-white w-9 h-9 rounded-full border border-neutral-700 flex items-center justify-center text-xs active:scale-90 transition shadow-lg z-20">
+                <i class="fa fa-chevron-right"></i>
+            </button>
         </div>
     </div>
 
@@ -407,6 +445,19 @@
         let cart = JSON.parse(localStorage.getItem('cartItems')) || [];
         let currentBasePrice = 0;
 
+        /* Image Gallery & Zoom State Variables */
+        let currentZoomImages = [];
+        let currentZoomIndex = 0;
+
+        /* Touch & Pinch Gesture Variables */
+        let scale = 1;
+        let lastScale = 1;
+        let startX = 0, startY = 0;
+        let posX = 0, posY = 0;
+        let lastPosX = 0, lastPosY = 0;
+        let startDistance = 0;
+        let lastTapTime = 0;
+
         /* Toast Notification */
         function showToast(message, type = 'success') {
             const container = document.getElementById('toastContainer');
@@ -422,6 +473,134 @@
             }, 2500);
         }
 
+        /* --- Natural Gallery-style Pinch & Double-Tap Touch Zoom Setup --- */
+        function resetZoomTransform() {
+            scale = 1;
+            lastScale = 1;
+            posX = 0;
+            posY = 0;
+            lastPosX = 0;
+            lastPosY = 0;
+            const imgEl = document.getElementById('modalZoomImg');
+            if (imgEl) imgEl.style.transform = `translate(0px, 0px) scale(1)`;
+        }
+
+        function initNaturalTouchZoom() {
+            const area = document.getElementById('zoomTouchArea');
+            const imgEl = document.getElementById('modalZoomImg');
+            if (!area || !imgEl) return;
+
+            area.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    const currentTime = new Date().getTime();
+                    const tapLength = currentTime - lastTapTime;
+                    
+                    // Double Tap gesture detection
+                    if (tapLength < 300 && tapLength > 0) {
+                        e.preventDefault();
+                        if (scale > 1) {
+                            resetZoomTransform();
+                        } else {
+                            scale = 2.5;
+                            lastScale = 2.5;
+                            imgEl.style.transform = `translate(0px, 0px) scale(2.5)`;
+                        }
+                    } else {
+                        startX = e.touches[0].clientX - posX;
+                        startY = e.touches[0].clientY - posY;
+                    }
+                    lastTapTime = currentTime;
+                } else if (e.touches.length === 2) {
+                    startDistance = Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY
+                    );
+                }
+            }, { passive: false });
+
+            area.addEventListener('touchmove', (e) => {
+                if (e.touches.length === 1 && scale > 1) {
+                    e.preventDefault();
+                    posX = e.touches[0].clientX - startX;
+                    posY = e.touches[0].clientY - startY;
+                    imgEl.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+                } else if (e.touches.length === 2) {
+                    e.preventDefault();
+                    const dist = Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY
+                    );
+                    if (startDistance > 0) {
+                        scale = Math.min(Math.max(1, lastScale * (dist / startDistance)), 4);
+                        imgEl.style.transform = `translate(${posX}px, ${posY}px) scale(${scale})`;
+                    }
+                }
+            }, { passive: false });
+
+            area.addEventListener('touchend', (e) => {
+                if (e.touches.length < 2) {
+                    lastScale = scale;
+                    lastPosX = posX;
+                    lastPosY = posY;
+                }
+                if (scale <= 1) {
+                    resetZoomTransform();
+                }
+            });
+        }
+
+        /* --- Image Lightbox / Zoom Controls --- */
+        function openZoomModal(imagesArray, startIndex = 0) {
+            if (!imagesArray || imagesArray.length === 0) return;
+            currentZoomImages = Array.isArray(imagesArray) ? imagesArray : [imagesArray];
+            currentZoomIndex = startIndex;
+
+            history.pushState({ modal: 'zoom' }, '');
+            updateZoomDisplay();
+
+            const modal = document.getElementById('zoomModal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            initNaturalTouchZoom();
+        }
+
+        function closeZoomModal() {
+            const modal = document.getElementById('zoomModal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+            resetZoomTransform();
+        }
+
+        function updateZoomDisplay() {
+            resetZoomTransform();
+            const imgEl = document.getElementById('modalZoomImg');
+            imgEl.src = currentZoomImages[currentZoomIndex];
+
+            document.getElementById('zoomImageCounter').innerText = `${currentZoomIndex + 1} / ${currentZoomImages.length}`;
+
+            if (currentZoomImages.length <= 1) {
+                document.getElementById('prevImgBtn').style.display = 'none';
+                document.getElementById('nextImgBtn').style.display = 'none';
+            } else {
+                document.getElementById('prevImgBtn').style.display = 'flex';
+                document.getElementById('nextImgBtn').style.display = 'flex';
+            }
+        }
+
+        function changeZoomImg(direction) {
+            currentZoomIndex += direction;
+            if (currentZoomIndex < 0) currentZoomIndex = currentZoomImages.length - 1;
+            if (currentZoomIndex >= currentZoomImages.length) currentZoomIndex = 0;
+            updateZoomDisplay();
+        }
+
+        function triggerZoomFromModal() {
+            if (activeProductId && productsData[activeProductId]) {
+                const images = getProductImages(productsData[activeProductId]);
+                openZoomModal(images, currentZoomIndex);
+            }
+        }
+
         /* --- Cart Logic --- */
         function updateCartBadge() {
             const badge = document.getElementById('cartBadge');
@@ -435,9 +614,25 @@
             localStorage.setItem('cartItems', JSON.stringify(cart));
         }
 
+        function getProductImages(p) {
+            let imgList = [];
+            
+            if (p.images && Array.isArray(p.images) && p.images.length > 0) {
+                imgList = p.images.map(url => typeof url === 'string' ? url.trim() : '').filter(Boolean);
+            } 
+            else if (p.images && typeof p.images === 'string') {
+                imgList = p.images.split(',').map(url => url.trim()).filter(Boolean);
+            }
+            else if (p.image && typeof p.image === 'string') {
+                imgList = p.image.split(',').map(url => url.trim()).filter(Boolean);
+            }
+
+            return imgList.length > 0 ? imgList : ['https://via.placeholder.com/300?text=No+Image'];
+        }
+
         function getPrimaryImage(p) {
-            if (p.images && Array.isArray(p.images) && p.images.length > 0) return p.images[0];
-            return p.image || '';
+            const imgs = getProductImages(p);
+            return imgs[0];
         }
 
         function addToCart(id) {
@@ -497,7 +692,7 @@
                 totalPrice += item.price * item.quantity;
                 list.innerHTML += `
                 <div class="bg-neutral-800/80 p-3 rounded-xl border border-neutral-700/60 flex items-center gap-3">
-                    <img src="${item.image}" class="w-14 h-14 object-cover rounded-lg bg-neutral-900">
+                    <img src="${item.image}" onclick="openZoomModal('${item.image}', 0)" class="w-14 h-14 object-cover rounded-lg bg-neutral-900 cursor-pointer hover:opacity-80">
                     <div class="flex-1 min-w-0">
                         <h4 class="text-xs font-bold text-white truncate">${item.title}</h4>
                         <p class="text-blue-400 text-xs font-extrabold mt-0.5">৳${item.price}</p>
@@ -904,6 +1099,7 @@
             const p = productsData[id];
             if(!p) return '';
             const mainImg = getPrimaryImage(p);
+            
             const oldPriceHTML = p.oldPrice ? `<span class="text-[8px] sm:text-[9px] text-gray-500 line-through">৳${p.oldPrice}</span>` : '';
             return `
             <div class="group bg-neutral-900/90 rounded-xl sm:rounded-2xl shadow-md overflow-hidden border border-neutral-800/80 hover:border-blue-500/50 transition-all duration-300 animate-slide-up flex flex-col relative">
@@ -930,11 +1126,12 @@
             </div>`;
         }
 
-        /* Multi-Image Modal Opener & Thumbnails Switcher */
+        /* --- Multi-Image Modal Opener & Thumbnails Switcher --- */
         function openProduct(id) {
             const p = productsData[id];
             if (!p) return;
             activeProductId = id;
+            currentZoomIndex = 0;
             history.pushState({ modal: 'product' }, '');
             
             document.getElementById('modalTitle').innerText = p.title || '';
@@ -942,26 +1139,22 @@
             document.getElementById('modalOldPrice').innerText = p.oldPrice ? "৳" + p.oldPrice : "";
             document.getElementById('modalDesc').innerText = p.desc || 'কোনো বিবরণ দেওয়া হয়নি।';
 
-            // Multi-image list setup
-            let imageList = [];
-            if (p.images && Array.isArray(p.images) && p.images.length > 0) {
-                imageList = p.images;
-            } else if (p.image) {
-                imageList = [p.image];
-            }
+            const imageList = getProductImages(p);
 
-            // Primary display image
-            document.getElementById('modalImageContainer').innerHTML = `<img id="mainProductImg" src="${imageList[0] || ''}" class="object-contain h-full w-full transition-all duration-300">`;
+            // Primary display image setup
+            document.getElementById('modalImageContainer').innerHTML = `
+                <img id="mainProductImg" src="${imageList[0]}" class="object-contain h-full w-full transition-all duration-300 rounded-lg">
+            `;
 
-            // Thumbnails gallery
+            // Thumbnails gallery setup
             const thumbContainer = document.getElementById('modalThumbnailContainer');
             thumbContainer.innerHTML = '';
 
             if (imageList.length > 1) {
                 imageList.forEach((imgUrl, index) => {
-                    const activeBorder = index === 0 ? 'border-blue-500 scale-105' : 'border-neutral-700 opacity-70';
+                    const activeStyle = index === 0 ? 'border-blue-500 scale-105 opacity-100' : 'border-neutral-700 opacity-60 hover:opacity-100';
                     thumbContainer.innerHTML += `
-                        <img src="${imgUrl}" onclick="switchModalImage(this, '${imgUrl}')" class="modal-thumb w-12 h-12 object-cover rounded-xl border-2 ${activeBorder} cursor-pointer transition-all duration-200 flex-shrink-0">
+                        <img src="${imgUrl}" onclick="switchModalImage(this, '${imgUrl}', ${index})" class="modal-thumb w-12 h-12 object-cover rounded-xl border-2 ${activeStyle} cursor-pointer transition-all duration-200 flex-shrink-0 bg-neutral-800">
                     `;
                 });
                 thumbContainer.classList.remove('hidden');
@@ -973,17 +1166,18 @@
             document.getElementById('productModal').classList.add('flex');
         }
 
-        function switchModalImage(element, url) {
+        function switchModalImage(element, url, index) {
+            currentZoomIndex = index;
             const mainImg = document.getElementById('mainProductImg');
             if (mainImg) mainImg.src = url;
 
             document.querySelectorAll('.modal-thumb').forEach(thumb => {
-                thumb.classList.remove('border-blue-500', 'scale-105');
-                thumb.classList.add('border-neutral-700', 'opacity-70');
+                thumb.classList.remove('border-blue-500', 'scale-105', 'opacity-100');
+                thumb.classList.add('border-neutral-700', 'opacity-60');
             });
 
-            element.classList.remove('border-neutral-700', 'opacity-70');
-            element.classList.add('border-blue-500', 'scale-105');
+            element.classList.remove('border-neutral-700', 'opacity-60');
+            element.classList.add('border-blue-500', 'scale-105', 'opacity-100');
         }
 
         function closeProduct() { 
@@ -1244,11 +1438,16 @@
         }
 
         window.addEventListener('popstate', (e) => {
+            const zoomModal = document.getElementById('zoomModal');
             const productModal = document.getElementById('productModal');
             const cartModal = document.getElementById('cartModal');
             const authModal = document.getElementById('authModal');
             const orderFormModal = document.getElementById('orderFormModal');
 
+            if (zoomModal && !zoomModal.classList.contains('hidden')) {
+                closeZoomModal();
+                return;
+            }
             if (orderFormModal && !orderFormModal.classList.contains('hidden')) {
                 closeOrderForm();
                 return;
